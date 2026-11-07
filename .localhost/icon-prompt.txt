@@ -1,0 +1,3 @@
+Created with the built-in ImageGen tool.
+
+Use case: logo-brand. Create one polished square app icon for Localhost, a personal home screen that launches local software projects. Solid forest-green background (#405d4b), filling the entire square edge to edge. A single bold warm-ivory emblem combines a simple welcoming roof with four rounded app tiles in a balanced 2-by-2 grid beneath it. Refined proportions, softly rounded geometry, generous margins, crisp edges, and excellent legibility at 64 pixels. Minimal, calm, distinctive, premium native-app design. No text, letters, numbers, gradients, glossy effects, decorative texture, outer frame, mockup, or surrounding scene. Output only the finished square icon artwork; the app will apply rounded corners.
