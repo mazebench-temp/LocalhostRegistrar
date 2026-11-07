@@ -1,0 +1,7 @@
+{
+  "name": "Localhost",
+  "command": "node src/server.js",
+  "port": 7777,
+  "icon": "icon.svg",
+  "color": "#405d4b"
+}

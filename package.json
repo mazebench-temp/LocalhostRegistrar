@@ -1,0 +1,16 @@
+{
+  "name": "localhost-registrar",
+  "version": "1.0.0",
+  "description": "A local home screen for your projects. Register with .localhost/app.json.",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22" },
+  "bin": { "localhost": "bin/localhost.js" },
+  "scripts": {
+    "start": "node bin/localhost.js",
+    "dev": "node src/server.js",
+    "test": "node --test test/*.test.js",
+    "check": "node --check bin/localhost.js && node --check src/server.js && node --check src/registry.js && node --check src/manager.js && node --check src/runner.js && node --check public/app.js && node --check public/order.js",
+    "install-command": "node scripts/install.js"
+  }
+}
