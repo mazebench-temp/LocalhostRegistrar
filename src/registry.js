@@ -47,7 +47,7 @@ export class Registry {
         if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('app.json must be a JSON object.');
         for (const key of Object.keys(input)) if (!['name', 'command', 'port', 'cwd', 'icon', 'color', 'path', 'env'].includes(key)) throw new Error(`Unknown field "${key}". Check the registration guide.`);
         if (typeof input.command !== 'string' || !input.command.trim() || input.command.length > 8192 || input.command.includes('\0')) throw new Error('command must be a nonempty string without null bytes (for example, "npm run dev").');
-        if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535 || (!isSelf && input.port === this.serverPort)) throw new Error(`port must be an integer from 1–65535, other than the launcher port (${this.serverPort}).`);
+        if (input.port !== undefined && input.port !== 'auto' && (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535)) throw new Error('port, if provided, must be "auto" or an integer from 1–65535.');
         if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 80)) throw new Error('name must be 1–80 characters.');
         if (input.cwd !== undefined && (typeof input.cwd !== 'string' || !input.cwd.trim())) throw new Error('cwd must be a folder path.');
         const cwd = await fs.realpath(path.resolve(projectDir, input.cwd || '.'));
@@ -73,21 +73,10 @@ export class Registry {
           if (input.icon.length > 16 || /[/.\\]/.test(input.icon)) throw new Error('Use an emoji or a PNG, JPG, WEBP, SVG, or ICO filename for icon.');
           emoji = input.icon;
         }
-        const appPort = isSelf ? this.serverPort : input.port;
-        apps.set(id, { id, isSelf, name: input.name?.trim() || entry.name, project: entry.name, projectDir, manifest, cwd, command: input.command, port: appPort, url: `http://localhost:${appPort}${isSelf ? '/' : input.path || '/'}`, color: input.color || colors[parseInt(id.slice(0, 4), 16) % colors.length], emoji, iconFile, iconType: iconFile ? imageTypes[ext] : null, env: input.env || {}, revision: createHash('sha256').update(raw).digest('hex').slice(0, 8) });
+        const appPort = isSelf ? this.serverPort : Number.isInteger(input.port) ? input.port : null;
+        apps.set(id, { id, isSelf, name: input.name?.trim() || entry.name, project: entry.name, projectDir, manifest, cwd, command: input.command, port: appPort, path: isSelf ? '/' : input.path || '/', url: appPort ? `http://localhost:${appPort}${isSelf ? '/' : input.path || '/'}` : null, color: input.color || colors[parseInt(id.slice(0, 4), 16) % colors.length], emoji, iconFile, iconType: iconFile ? imageTypes[ext] : null, env: input.env || {}, revision: createHash('sha256').update(raw).digest('hex').slice(0, 8) });
       } catch (error) { issues.push({ project: entry.name, message: error.message }); }
     }));
-    const byPort = new Map();
-    for (const app of apps.values()) {
-      const list = byPort.get(app.port) || [];
-      list.push(app); byPort.set(app.port, list);
-    }
-    for (const [port, conflicts] of byPort) if (conflicts.length > 1) {
-      for (const app of conflicts) {
-        apps.delete(app.id);
-        issues.push({ project: app.project, message: `Port ${port} is also registered by ${conflicts.filter(a => a !== app).map(a => a.project).join(', ')}. Choose a unique port.` });
-      }
-    }
     this.apps = new Map([...apps].sort((a, b) => a[1].name.localeCompare(b[1].name)));
     this.issues = issues.sort((a, b) => a.project.localeCompare(b.project));
   }

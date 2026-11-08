@@ -76,7 +76,7 @@ test('discovery uses each project’s .localhost folder, optional settings and i
   assert.match(response.headers.get('content-security-policy'), /sandbox/);
 });
 
-test('invalid JSON, unknown settings, duplicate ports, and escaped icons are reported', async t => {
+test('invalid registrations are reported while duplicate legacy port hints stay registered', async t => {
   const { root, registry, scan } = await setup(t);
   const sharedPort = await freePort();
   await register(root, 'One', { port: sharedPort }); await register(root, 'Two', { port: sharedPort });
@@ -88,8 +88,7 @@ test('invalid JSON, unknown settings, duplicate ports, and escaped icons are rep
   await fs.writeFile(path.join(root, 'Escape/external.png'), 'fake image');
   await fs.symlink(path.join(root, 'external.png'), path.join(escaped, 'outside.png'));
   await scan();
-  assert.equal(registry.apps.size, 0); assert.equal(registry.issues.length, 5);
-  assert.ok(registry.issues.some(issue => /unique port/.test(issue.message)));
+  assert.equal(registry.apps.size, 2); assert.equal(registry.issues.length, 3);
   assert.ok(registry.issues.some(issue => /Unknown field/.test(issue.message)));
   assert.ok(registry.issues.some(issue => /inside .localhost/.test(issue.message)));
 });
@@ -127,7 +126,7 @@ test('crashed app restarts automatically and stop cancels queued retries', async
   assert.equal(manager.state(app.id).status, 'stopped'); assert.equal(await portOpen(app.port), false);
 });
 
-test('occupied ports fail without stopping unrelated servers', async t => {
+test('occupied ports automatically move to a free address without stopping unrelated servers', async t => {
   const { root, scan, manager, request } = await setup(t);
   const other = http.createServer((req, res) => res.end('untouched'));
   await new Promise(resolve => other.listen(0, '127.0.0.1', resolve));
@@ -135,8 +134,109 @@ test('occupied ports fail without stopping unrelated servers', async t => {
   const appPort = other.address().port;
   await register(root, 'Conflict', { port: appPort }); await scan(); const app = manager.list()[0];
   const response = await request(`/api/apps/${app.id}/launch`, 'POST');
-  assert.equal(response.status, 409); assert.match(response.data.app.error, /already in use/);
+  assert.equal(response.status, 200);
+  assert.notEqual(response.data.app.port, appPort);
+  await until(() => manager.state(app.id).status === 'running');
+  assert.equal((await (await fetch(manager.list()[0].url)).json()).message, 'Fixture app is ready');
   assert.equal(await (await fetch(app.url)).text(), 'untouched');
+});
+
+test('simultaneous launches with the same legacy hint get distinct owned servers', async t => {
+  const { root, scan, manager } = await setup(t);
+  const sharedPort = await freePort();
+  await register(root, 'One', { port: sharedPort });
+  await register(root, 'Two', { port: sharedPort });
+  await register(root, 'Automatic', { port: undefined });
+  await scan();
+  const apps = manager.list();
+  await Promise.all(apps.map(app => manager.launch(app.id)));
+  await until(() => manager.list().every(app => app.status === 'running'));
+  const running = manager.list();
+  assert.equal(new Set(running.map(app => app.port)).size, 3);
+  const pids = await Promise.all(running.map(async app => (await (await fetch(app.url)).json()).pid));
+  assert.equal(new Set(pids).size, 3);
+  await scan();
+  assert.deepEqual(manager.list().map(app => app.url), running.map(app => app.url), 'rescans retain actual endpoints');
+});
+
+test('a server choosing its own ephemeral port is discovered without a configuration warning', async t => {
+  const { root, scan, manager } = await setup(t);
+  await register(root, 'OwnAddress', { port: undefined, path: '/hello', env: { FIXTURE_PORT: '0' } });
+  await scan();
+  const app = manager.list()[0];
+  await manager.launch(app.id);
+  const suggested = manager.state(app.id).targetPort;
+  await until(() => manager.state(app.id).status === 'running');
+  const actual = manager.list()[0];
+  assert.notEqual(actual.port, suggested);
+  assert.equal(actual.error, null);
+  assert.ok(actual.url.endsWith('/hello'));
+  assert.equal((await (await fetch(actual.url)).json()).message, 'Fixture app is ready');
+});
+
+test('an unrelated HTTP responder cannot satisfy startup readiness', async t => {
+  const { root, scan, manager } = await setup(t, { startupTimeout: 1500 });
+  await register(root, 'NotAServer', { port: undefined, env: { FIXTURE_HANG: '1' } });
+  await scan();
+  const app = manager.list()[0];
+  await manager.launch(app.id);
+  const other = http.createServer((req, res) => res.end('unrelated'));
+  await new Promise(resolve => other.listen(manager.state(app.id).targetPort, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => other.close(resolve)));
+  let claimedRunning = false;
+  const watch = setInterval(() => { claimedRunning ||= manager.state(app.id).status === 'running'; }, 20);
+  t.after(() => clearInterval(watch));
+  await until(() => manager.state(app.id).status === 'error');
+  assert.equal(claimedRunning, false);
+  assert.equal(await (await fetch(`http://127.0.0.1:${other.address().port}`)).text(), 'unrelated');
+});
+
+test('a port taken between allocation and bind is retried automatically', async t => {
+  const { root, scan, manager } = await setup(t);
+  await register(root, 'Race', { port: undefined, env: { FIXTURE_DELAY: '600' } });
+  await scan();
+  const app = manager.list()[0];
+  await manager.launch(app.id);
+  const firstPort = manager.state(app.id).targetPort;
+  const other = http.createServer((req, res) => res.end('untouched'));
+  await new Promise(resolve => other.listen(firstPort, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => other.close(resolve)));
+  await until(() => manager.state(app.id).status === 'running', 'automatic conflict recovery');
+  assert.notEqual(manager.list()[0].port, firstPort);
+  assert.equal(manager.list()[0].error, null);
+  assert.equal(await (await fetch(`http://127.0.0.1:${firstPort}`)).text(), 'untouched');
+});
+
+test('npm workspace dev scripts receive automatic Vite arguments while preserving lifecycle scripts', async t => {
+  const { root, scan, manager } = await setup(t);
+  const dir = await register(root, 'Workspace', { command: 'npm run dev --workspace @test/site', port: undefined });
+  const project = path.dirname(dir);
+  const site = path.join(project, 'site');
+  await fs.mkdir(path.join(site, 'node_modules/.bin'), { recursive: true });
+  await fs.writeFile(path.join(project, 'package.json'), JSON.stringify({ private: true, workspaces: ['site'] }));
+  await fs.writeFile(path.join(site, 'package.json'), JSON.stringify({ name: '@test/site', scripts: { predev: 'node -e "require(\'fs\').writeFileSync(\'lifecycle-ran\', \'yes\')"', dev: 'vite --port 3000' } }));
+  // A small CLI fixture with Vite's last-value-wins port behavior. The selected
+  // address must reach the CLI through npm, not just appear in an env variable.
+  await fs.writeFile(path.join(site, 'node_modules/.bin/vite'), `#!${process.execPath}\nprocess.env.FIXTURE_PORT = process.argv[process.argv.lastIndexOf('--port') + 1];\nimport(${JSON.stringify(new URL('./fixtures/server.js', import.meta.url).href)});\n`, { mode: 0o755 });
+  await scan();
+  const app = manager.list()[0];
+  await manager.launch(app.id);
+  await until(() => manager.state(app.id).status === 'running', 'workspace dev server');
+  assert.notEqual(manager.list()[0].port, 3000);
+  assert.equal(manager.list()[0].port, manager.state(app.id).targetPort);
+  assert.equal(await fs.readFile(path.join(site, 'lifecycle-ran'), 'utf8'), 'yes');
+});
+
+test('Python HTTP server startup needs no port in its command or manifest', async t => {
+  const { root, scan, manager } = await setup(t);
+  await register(root, 'Python', { command: 'python3 -u -m http.server --bind 127.0.0.1', port: undefined });
+  await fs.writeFile(path.join(root, 'Python/index.html'), 'Python is ready');
+  await scan();
+  const app = manager.list()[0];
+  await manager.launch(app.id);
+  await until(() => manager.state(app.id).status === 'running', 'Python server');
+  assert.equal(await (await fetch(manager.list()[0].url)).text(), 'Python is ready');
+  assert.equal(manager.list()[0].port, manager.state(app.id).targetPort);
 });
 
 test('startup timeout gives actionable error and stops process', async t => {
@@ -144,7 +244,7 @@ test('startup timeout gives actionable error and stops process', async t => {
   await register(root, 'NoHttp', { env: { FIXTURE_HANG: '1' } }); await scan(); const app = manager.list()[0];
   await manager.launch(app.id);
   await until(() => manager.state(app.id).status === 'error', 'startup timeout');
-  assert.match(manager.state(app.id).error, /No HTTP response/);
+  assert.match(manager.state(app.id).error, /did not start an HTTP server/);
   await until(() => !manager.state(app.id).child, 'timed out process exit');
   assert.equal(manager.state(app.id).desired, false);
 });
@@ -226,6 +326,14 @@ test('CLI registers without overwriting, starts a persistent daemon, lists and s
   assert.equal(await portOpen(appPort), false);
   assert.match((await cli(['stop', 'Localhost'])).stdout, /Stopped Localhost/);
   await until(async () => !await portOpen(launcherPort), 'launcher shutdown');
+});
+
+test('localhost init registers a project without asking for a port', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'localhost-auto-init-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const env = { ...process.env, LOCALHOST_PROJECTS_DIR: root, LOCALHOST_PORT: String(await freePort()) };
+  await promisify(execFile)(process.execPath, [cliFile, 'init'], { cwd: root, env });
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(root, '.localhost/app.json'))), { command: 'npm run dev' });
 });
 
 test('Localhost registers itself on the active port and can shut down itself and its apps', async t => {

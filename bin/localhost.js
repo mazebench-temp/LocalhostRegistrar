@@ -52,20 +52,20 @@ async function openBrowser() {
 async function main() {
   const command = args[0];
   if (['--help', '-h', 'help'].includes(command)) {
-    console.log(`Localhost — your projects, one home screen\n\n  localhost                   Start the launcher and open your browser\n  localhost --no-open         Start the launcher without opening a browser\n  localhost init --port 3000  Register this project (command defaults to npm run dev)\n    --command "…" --name "…"  Optional project settings\n  localhost list              List registered apps and their status\n  localhost stop [name|id]     Stop one app, or all apps when omitted\n  localhost shutdown          Stop all apps and the launcher\n\nRegistration: ${projectsDir}/<project>/.localhost/app.json\nExample: { "command": "npm run dev", "port": 3000 }\nOptional icon: .localhost/icon.png\n\nSettings: LOCALHOST_PROJECTS_DIR, LOCALHOST_PORT (7777), LOCALHOST_DATA_DIR\nRequires Node.js 22+ on macOS or Linux.`);
+    console.log(`Localhost — your projects, one home screen\n\n  localhost                   Start the launcher and open your browser\n  localhost --no-open         Start the launcher without opening a browser\n  localhost init             Register this project (command defaults to npm run dev)\n    --command "…" --name "…"  Optional project settings\n  localhost list              List registered apps and their status\n  localhost stop [name|id]     Stop one app, or all apps when omitted\n  localhost shutdown          Stop all apps and the launcher\n\nRegistration: ${projectsDir}/<project>/.localhost/app.json\nExample: { "command": "npm run dev" }\nOptional icon: .localhost/icon.png\n\nSettings: LOCALHOST_PROJECTS_DIR, LOCALHOST_PORT (7777), LOCALHOST_DATA_DIR\nRequires Node.js 22+ on macOS or Linux.`);
     return;
   }
   if (command === 'init') {
     const options = {};
     for (let i = 1; i < args.length; i += 2) {
-      if (!['--port', '--command', '--name'].includes(args[i]) || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error('Usage: localhost init --port 3000 [--command "npm run dev"] [--name "My app"]');
+      if (!['--port', '--command', '--name'].includes(args[i]) || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error('Usage: localhost init [--command "npm run dev"] [--name "My app"]');
       options[args[i].slice(2)] = args[i + 1];
     }
-    const appPort = Number(options.port);
-    if (!Number.isInteger(appPort) || appPort < 1 || appPort > 65535 || appPort === port) throw new Error('Provide an available port: localhost init --port 3000');
+    const appPort = options.port === undefined ? null : Number(options.port);
+    if (appPort !== null && (!Number.isInteger(appPort) || appPort < 1 || appPort > 65535)) throw new Error('--port must be an integer from 1–65535. You can omit it for automatic setup.');
     const dir = path.join(process.cwd(), '.localhost');
     await fs.mkdir(dir, { recursive: true });
-    const config = { ...(options.name ? { name: options.name } : {}), command: options.command || 'npm run dev', port: appPort };
+    const config = { ...(options.name ? { name: options.name } : {}), command: options.command || 'npm run dev', ...(appPort === null ? {} : { port: appPort }) };
     await fs.writeFile(path.join(dir, 'app.json'), JSON.stringify(config, null, 2) + '\n', { flag: 'wx' });
     console.log(`Created ${path.join(dir, 'app.json')}\nAdd an optional icon.png alongside it.`);
     if (path.dirname(process.cwd()) !== projectsDir) console.log(`This folder is outside ${projectsDir}. Set LOCALHOST_PROJECTS_DIR to its parent before starting the launcher.`);
@@ -78,7 +78,7 @@ async function main() {
   } else await ensureServer();
   if (command === 'list') {
     const { apps, issues } = await api('/api/apps');
-    for (const app of apps) console.log(`${app.status.padEnd(12)} ${app.name.padEnd(24)} ${app.url}  ${app.id}`);
+    for (const app of apps) console.log(`${app.status.padEnd(12)} ${app.name.padEnd(24)} ${app.url || ''}  ${app.id}`);
     for (const issue of issues) console.error(`${issue.project}: ${issue.message}`);
     if (!apps.length) console.log(`No apps yet. Add .localhost/app.json to a project in ${projectsDir}.`);
   } else if (command === 'stop') {

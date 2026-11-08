@@ -1,4 +1,5 @@
 import { normalizeOrder, orderApps, moveApp } from './order.js';
+import { initWallpapers } from './wallpaper.js';
 
 const $ = selector => document.querySelector(selector);
 const activeStatuses = new Set(['starting', 'running', 'restarting', 'stopping']);
@@ -343,5 +344,6 @@ $('#stop-all').addEventListener('click', async () => {
   } catch (error) { notice(error.message); }
   finally { busy.delete('all'); actionVersion++; render(); if (connected) await refresh(); }
 });
+initWallpapers(notice).catch(error => notice(error.message));
 refresh();
 setInterval(refresh, 1500);

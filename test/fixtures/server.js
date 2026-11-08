@@ -10,5 +10,5 @@ if (process.env.FIXTURE_CHILD === '1') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ pid: process.pid, message: 'Fixture app is ready' }));
   });
-  server.listen(Number(process.env.PORT), '127.0.0.1', () => console.log('Fixture ready on', process.env.PORT));
+  setTimeout(() => server.listen(Number(process.env.FIXTURE_PORT ?? process.env.PORT), '127.0.0.1', () => console.log('Fixture ready on', server.address().port)), Number(process.env.FIXTURE_DELAY || 0));
 }

@@ -8,6 +8,8 @@ import { port, projectsDir, baseURL } from './config.js';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const files = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/order.js', ['order.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
+for (const name of ['wallpaper.js', 'wallpaper-store.js']) files.set(`/${name}`, [name, 'text/javascript']);
+for (const name of ['meadow', 'coast', 'dunes', 'cave', 'galaxies']) files.set(`/backgrounds/${name}.png`, [`backgrounds/${name}.png`, 'image/png']);
 export async function createLauncher({ root = projectsDir, listenPort = port, managerOptions, includeSelf = true } = {}) {
   const registry = new Registry(root, listenPort, { includeSelf });
   await registry.scan();
@@ -21,7 +23,7 @@ export async function createLauncher({ root = projectsDir, listenPort = port, ma
   const server = http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
       const actualPort = server.address()?.port;
       const hosts = [`localhost:${actualPort}`, `127.0.0.1:${actualPort}`];

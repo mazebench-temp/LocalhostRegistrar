@@ -1,18 +1,12 @@
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
-import net from 'node:net';
+import { choosePort, listenersByGroup } from './ports.js';
+import { launchCommand } from './launch-command.js';
+export { portOpen } from './ports.js';
 
 const runner = fileURLToPath(new URL('./runner.js', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-export const portOpen = (port, host = '127.0.0.1') => new Promise(resolve => {
-  const socket = net.connect({ port, host });
-  const finish = value => { socket.destroy(); resolve(value); };
-  socket.setTimeout(350);
-  socket.once('connect', () => finish(true));
-  socket.once('error', () => finish(false));
-  socket.once('timeout', () => finish(false));
-});
 function ready(url) {
   return new Promise(resolve => {
     const req = http.get(url, { timeout: 1200 }, res => { res.destroy(); resolve(res.statusCode < 500); });
@@ -45,7 +39,7 @@ export class Manager {
   describe(app) {
     if (app.isSelf) return { id: app.id, isSelf: true, name: app.name, project: app.project, cwd: app.cwd, command: app.command, port: this.registry.serverPort, url: `http://localhost:${this.registry.serverPort}/`, color: app.color, emoji: app.emoji, icon: app.iconFile ? `/api/apps/${app.id}/icon?v=${app.revision}` : null, status: this.closing ? 'stopping' : 'running', error: null, pid: process.pid, startedAt: null, retries: 0, configChanged: false };
     const state = this.state(app.id);
-    const current = state.config && state.desired ? state.config : app;
+    const current = state.config && (state.desired || state.config.revision === app.revision) ? state.config : app;
     return { id: app.id, name: app.name, project: app.project, cwd: current.cwd, command: current.command, port: current.port, url: current.url, color: app.color, emoji: app.emoji, icon: app.iconFile ? `/api/apps/${app.id}/icon?v=${app.revision}` : null, status: state.status, error: state.error, pid: state.child?.pid || null, startedAt: state.startedAt, retries: state.retries, configChanged: !!state.config && state.desired && state.config.revision !== app.revision };
   }
   list() { return [...this.registry.apps.values()].map(app => this.describe(app)); }
@@ -59,6 +53,7 @@ export class Manager {
       const state = this.state(id);
       await this.stopState(state);
       state.retries = 0;
+      state.failedPorts = new Set();
       state.error = null;
       state.desired = true;
       await this.spawn(app, state);
@@ -67,29 +62,39 @@ export class Manager {
   }
   async spawn(app, state) {
     if (!state.desired || this.closing) return;
-    if ((await Promise.all([portOpen(app.port), portOpen(app.port, '::1')])).some(Boolean)) {
-      state.status = 'error'; state.desired = false;
-      state.error = `Port ${app.port} is already in use. Stop its existing server, then try again.`;
-      this.log(state, `\n[localhost] ${state.error}\n`);
+    const excluded = new Set([this.registry.serverPort, ...state.failedPorts || []]);
+    for (const other of this.states.values()) if (other !== state && (other.desired || other.child)) {
+      excluded.add(other.config?.port);
+      excluded.add(other.targetPort);
+    }
+    let port, command;
+    try {
+      port = await choosePort(app, excluded, state.config?.revision === app.revision ? state.config.port : null);
+      command = await launchCommand(app, port);
+    } catch (error) {
+      state.status = 'error'; state.desired = false; state.error = error.message;
       return;
     }
     state.status = 'starting';
-    state.config = app;
+    state.config = { ...app, port, url: `http://localhost:${port}${app.path || '/'}` };
+    state.targetPort = port;
+    state.startLogs = '';
     state.error = null;
     state.startedAt = new Date().toISOString();
     state.readySince = null;
-    this.log(state, `\n[localhost] Starting ${app.command} in ${app.cwd}\n`);
+    this.log(state, `\n[localhost] Starting ${command} in ${app.cwd}\n`);
     let child;
     try {
-      child = fork(runner, [app.command], { cwd: app.cwd, detached: true, env: { ...process.env, ...app.env, PORT: String(app.port), FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+      child = fork(runner, [command], { cwd: app.cwd, detached: true, env: { ...process.env, ...app.env, PORT: String(port), FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     } catch (error) {
       state.desired = false; state.status = 'error'; state.error = error.message;
       this.log(state, `\n[localhost] ${error.message}\n`);
       return;
     }
     state.child = child;
-    child.stdout.on('data', data => this.log(state, data.toString()));
-    child.stderr.on('data', data => this.log(state, data.toString()));
+    const output = data => { const text = data.toString(); this.log(state, text); state.startLogs = (state.startLogs + text).slice(-32 * 1024); };
+    child.stdout.on('data', output);
+    child.stderr.on('data', output);
     let exitDetail = '';
     child.on('message', message => { if (message.type === 'exit') exitDetail = message.error || (message.signal ? `signal ${message.signal}` : `code ${message.code}`); });
     child.on('error', error => { exitDetail = error.message; this.log(state, `\n[localhost] ${error.message}\n`); });
@@ -97,11 +102,21 @@ export class Manager {
       if (state.child !== child) return;
       state.child = null;
       if (state.desired && !this.closing) {
+        const collision = /EADDRINUSE|address already in use|port\s+\d+\s+is (?:already )?in use/i.test(state.startLogs);
+        if (collision) {
+          state.failedPorts ||= new Set();
+          state.failedPorts.add(state.targetPort);
+          if (state.failedPorts.size >= 5) {
+            state.status = 'error'; state.desired = false;
+            state.error = 'The start command could not launch the app. See Logs for details.';
+            return;
+          }
+        }
         state.retries++;
         state.status = 'restarting';
-        const backoff = Math.min(this.retryDelay * 2 ** Math.min(state.retries - 1, 4), 30_000);
-        state.error = `Process exited${exitDetail ? ` (${exitDetail})` : ''}. Retrying in ${Math.ceil(backoff / 1000)}s.`;
-        this.log(state, `\n[localhost] ${state.error}\n`);
+        const backoff = collision ? 100 : Math.min(this.retryDelay * 2 ** Math.min(state.retries - 1, 4), 30_000);
+        state.error = collision ? null : `Process exited${exitDetail ? ` (${exitDetail})` : ''}. Retrying in ${Math.ceil(backoff / 1000)}s.`;
+        this.log(state, `\n[localhost] ${collision ? 'Trying another server address.' : state.error}\n`);
         state.retryTimer = setTimeout(() => this.serial(async () => {
           const current = this.registry.apps.get(app.id);
           if (current && state.desired && !this.closing) await this.spawn(current, state);
@@ -115,12 +130,25 @@ export class Manager {
     if (this.checking || this.closing) return;
     this.checking = true;
     try {
+      if (![...this.states.values()].some(state => state.child && ['starting', 'running'].includes(state.status))) return;
+      const listeners = await listenersByGroup();
       await Promise.all([...this.states.values()].map(async state => {
         if (!state.child || !['starting', 'running'].includes(state.status)) return;
         const child = state.child;
-        const healthy = await ready(state.config.url);
+        const owned = listeners.get(child.pid) || new Set();
+        const announced = [...state.startLogs.matchAll(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):(\d+)/g)].map(match => Number(match[1]));
+        const candidates = [...new Set([state.config.port, state.targetPort, ...announced, ...owned])].filter(port => owned.has(port));
+        let endpoint;
+        for (const port of candidates) {
+          const url = `http://localhost:${port}${state.config.path || '/'}`;
+          if (await ready(url)) { endpoint = { port, url }; break; }
+        }
+        const healthy = !!endpoint;
         if (state.child !== child || !state.desired || !['starting', 'running'].includes(state.status)) return;
         if (healthy) {
+          // Servers may choose their own free port. Follow their owned listener
+          // silently instead of insisting they use the launcher's suggestion.
+          Object.assign(state.config, endpoint);
           if (state.status === 'starting') { state.status = 'running'; state.readySince = Date.now(); state.error = null; }
           if (Date.now() - state.readySince > 30_000) state.retries = 0;
         } else if (state.status === 'running') {
@@ -128,11 +156,18 @@ export class Manager {
         } else if (Date.now() - Date.parse(state.startedAt) > this.startupTimeout) {
           state.desired = false;
           state.status = 'error';
-          state.error = `No HTTP response on port ${state.config.port} after ${Math.round(this.startupTimeout / 1000)}s. Check the command and port in .localhost/app.json.`;
+          state.error = `The app did not start an HTTP server within ${Math.round(this.startupTimeout / 1000)}s. See Logs for details.`;
           this.log(state, `\n[localhost] ${state.error}\n`);
           try { process.kill(-child.pid, 'SIGTERM'); } catch { /* Already gone. */ }
         }
       }));
+    } catch (error) {
+      for (const state of this.states.values()) if (state.child && state.desired) {
+        state.status = 'error'; state.desired = false;
+        state.error = error.code === 'ENOENT' ? 'Server discovery requires lsof and ps.' : 'Could not discover the app’s server.';
+        this.log(state, `\n[localhost] ${error.message}\n`);
+        try { process.kill(-state.child.pid, 'SIGTERM'); } catch { /* Already gone. */ }
+      }
     } finally { this.checking = false; }
   }
   async stopState(state) {

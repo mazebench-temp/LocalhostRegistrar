@@ -10,7 +10,7 @@
     "start": "node bin/localhost.js",
     "dev": "node src/server.js",
     "test": "node --test test/*.test.js",
-    "check": "node --check bin/localhost.js && node --check src/server.js && node --check src/registry.js && node --check src/manager.js && node --check src/runner.js && node --check public/app.js && node --check public/order.js",
+    "check": "node --check bin/localhost.js && node --check src/server.js && node --check src/registry.js && node --check src/manager.js && node --check src/runner.js && node --check src/ports.js && node --check src/launch-command.js && node --check public/app.js && node --check public/order.js && node --check public/wallpaper.js && node --check public/wallpaper-store.js",
     "install-command": "node scripts/install.js"
   }
 }

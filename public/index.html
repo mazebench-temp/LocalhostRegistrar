@@ -10,11 +10,16 @@
   <script src="/app.js" type="module"></script>
 </head>
 <body>
+  <div id="wallpaper" aria-hidden="true"></div>
   <main aria-label="Home screen"><div id="app-grid" class="app-grid"></div></main>
+  <button id="wallpaper-button" class="wallpaper-open" aria-label="Choose background" title="Choose background">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m4 17 5-5 4 4 3-3 4 4"/></svg>
+  </button>
   <nav class="dock" aria-label="Controls">
     <button id="issues-button" class="dock-button" aria-label="Registration issues" title="Registration issues" hidden>!</button>
     <button id="stop-all" class="dock-button" aria-label="Shut down everything, including Localhost" title="Shut down everything, including Localhost">
       <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" aria-hidden="true"><path d="M16 3v12"/><path d="M8.2 7.8a11 11 0 1 0 15.6 0"/></svg>
+      <span class="power-label" aria-hidden="true">Shut down</span>
     </button>
   </nav>
   <dialog id="app-menu" aria-labelledby="menu-name">
@@ -26,6 +31,13 @@
     <p id="app-error" class="error-text" hidden></p>
   </dialog>
   <dialog id="issues-dialog" aria-labelledby="issues-title"><div class="menu-heading"><h1 id="issues-title">Registration issues</h1><button class="close-button" data-close aria-label="Close">×</button></div><div id="issues"></div></dialog>
+  <dialog id="wallpaper-dialog" aria-labelledby="wallpaper-title">
+    <div class="menu-heading"><h1 id="wallpaper-title">Backgrounds</h1><button id="wallpaper-upload" type="button">＋ Upload image</button><button class="close-button" data-close aria-label="Close backgrounds">×</button></div>
+    <input id="wallpaper-input" type="file" accept="image/png,image/jpeg,image/webp,image/avif" multiple hidden>
+    <div id="wallpaper-grid" class="wallpaper-grid" aria-label="Choose a background"></div>
+    <p id="wallpaper-error" class="error-text" role="alert" hidden></p>
+    <p class="wallpaper-note">Your uploads stay in this browser. Up to 20 MB per image.</p>
+  </dialog>
   <div id="notice" class="notice" role="status" hidden></div>
   <span id="announcement" class="sr-only" aria-live="polite"></span>
 </body>
