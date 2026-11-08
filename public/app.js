@@ -237,9 +237,8 @@ async function refresh() {
     for (const [id, pending] of pendingWindows) {
       const app = apps.find(item => item.id === id);
       if (app?.status === 'running') {
-        if (pending.window && !pending.window.closed) pending.window.location.replace(app.url);
-        else { showMenu(id); notice(`${app.name} is ready. Tap Open.`); }
         pendingWindows.delete(id);
+        navigateToApp(app, pending.window);
       } else if (!app || ['error', 'stopped'].includes(app.status) || Date.now() - pending.at > 180_000) {
         closePending(id);
         notice(app?.error || 'App did not start.');
@@ -255,9 +254,8 @@ async function refresh() {
     if ($('#app-menu').open) updateMenu();
   } finally { refreshing = false; }
 }
-async function launchApp(app) {
-  if (app.isSelf) { showMenu(app.id); return; }
-  if (!connected || busy.has(app.id) || busy.has('all')) return;
+function createAppTab(app) {
+  // Reserve the tab during the click, before waiting for the server to start.
   const tab = window.open('about:blank', '_blank');
   if (tab) {
     tab.opener = null;
@@ -265,7 +263,22 @@ async function launchApp(app) {
     tab.document.body.textContent = `${app.name}…`;
     tab.document.body.style.cssText = 'font:16px -apple-system,sans-serif;padding:10vh 8vw;background:#f3f3f0;color:#30362f';
   }
+  return tab;
+}
+function navigateToApp(app, tab) {
+  // Safari can block even a directly clicked new tab. Keep Open useful in that
+  // case, and respect a tab the user deliberately closed while the app started.
+  if (!tab) window.location.assign(app.url);
+  else if (!tab.closed) {
+    try { tab.location.replace(app.url); }
+    catch { notice(`${app.name} is ready. Open it from its menu.`); }
+  }
+}
+async function launchApp(app) {
+  if (app.isSelf) { showMenu(app.id); return; }
+  if (!connected || busy.has(app.id) || busy.has('all')) return;
   $('#app-menu').close();
+  const tab = createAppTab(app);
   busy.add(app.id); actionVersion++; render();
   try {
     const { app: updated } = await api(`/api/apps/${app.id}/launch`, 'POST');
@@ -276,6 +289,7 @@ async function launchApp(app) {
 }
 async function stopApp(app) {
   if (!connected || busy.has(app.id) || busy.has('all')) return;
+  $('#app-menu').close();
   busy.add(app.id);
   if (app.isSelf) busy.add('all');
   actionVersion++; render();
@@ -324,6 +338,15 @@ async function updateMenu() {
   }
 }
 $('#menu-launch').addEventListener('click', () => { const app = apps.find(item => item.id === menuId); if (app) launchApp(app); });
+$('#menu-open').addEventListener('click', event => {
+  // Preserve native Command/Ctrl-click, Shift-click, and middle-click behavior.
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  const app = apps.find(item => item.id === menuId);
+  if (!app || app.status !== 'running' || !connected) return;
+  $('#app-menu').close();
+  navigateToApp(app, createAppTab(app));
+});
 $('#menu-stop').addEventListener('click', () => { const app = apps.find(item => item.id === menuId); if (app) stopApp(app); });
 $('#output').addEventListener('toggle', () => { if ($('#output').open) updateMenu(); });
 $('#issues-button').addEventListener('click', () => $('#issues-dialog').showModal());
